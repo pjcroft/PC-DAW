@@ -26,6 +26,18 @@ Runs on **macOS (Apple Silicon + Intel, universal binary)** and **Linux**.
 - **Look**: Pro Tools / Logic / Reaper style arrange view in a "Midnight Chrome" theme. All colours live in
   [`Source/Theme.h`](Source/Theme.h).
 
+## Download a build
+
+Every push to `main` is built by GitHub Actions for macOS (universal) and Linux. Open the
+[Actions tab](https://github.com/pjcroft/PC-DAW/actions), click the latest green run, and download
+**Tapedeck-macOS-universal** from *Artifacts*. Unzip it, then because the app isn't signed run:
+
+```bash
+xattr -dr com.apple.quarantine ~/Downloads/Tapedeck.app
+```
+
+(or right-click the app > **Open** the first time).
+
 ## Building
 
 You need CMake 3.22+ and a C++20 compiler. The first configure downloads JUCE and Tracktion Engine

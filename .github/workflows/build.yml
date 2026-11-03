@@ -1,0 +1,77 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: macOS (universal arm64 + x86_64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-macos-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -j4
+
+      - name: Check universal binary
+        run: lipo -info build/Tapedeck_artefacts/Release/Tapedeck.app/Contents/MacOS/Tapedeck
+
+      - name: Package
+        run: |
+          cd build/Tapedeck_artefacts/Release
+          ditto -c -k --keepParent Tapedeck.app Tapedeck-macOS-universal.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tapedeck-macOS-universal
+          path: build/Tapedeck_artefacts/Release/Tapedeck-macOS-universal.zip
+
+  linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libasound2-dev libjack-jackd2-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libxcomposite-dev \
+            libxi-dev libxrender-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev xvfb
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-linux-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j4
+
+      - name: Smoke test (demo session + stem export)
+        run: |
+          xvfb-run -a build/Tapedeck_artefacts/Release/Tapedeck --demo --export-stems "$RUNNER_TEMP/stems" | tee export.log
+          test "$(grep -c Wrote export.log)" -ge 4
+
+      - name: Package
+        run: tar -C build/Tapedeck_artefacts/Release -czf Tapedeck-linux-x86_64.tar.gz Tapedeck
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tapedeck-linux-x86_64
+          path: Tapedeck-linux-x86_64.tar.gz
