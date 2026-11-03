@@ -45,6 +45,8 @@ You need CMake 3.22+ and a C++20 compiler. The first configure downloads JUCE an
 
 ### macOS (universal: arm64 + x86_64)
 
+Requires **Xcode 16 or newer** (Tracktion Engine uses C++20 features older Apple Clang lacks) and macOS 12+ to run.
+
 ```bash
 xcode-select --install          # if you don't have the command line tools
 brew install cmake              # if you don't have CMake

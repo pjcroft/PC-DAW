@@ -121,6 +121,7 @@ TrackHeader::TrackHeader (Session& s, te::AudioTrack& t, TimelineState& st)
         addAndMakeVisible (b);
 
     inputBox.setTooltip ("Input");
+    inputBox.setWantsKeyboardFocus (false);   // keep Space/Enter for the transport
     inputBox.onChange = [this]
     {
         auto id = inputBox.getSelectedId();

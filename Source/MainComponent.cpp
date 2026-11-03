@@ -126,6 +126,7 @@ TransportBar::TransportBar (Session& s) : session (&s)
     countInBox.addItem ("1 Bar Count-in", 2);
     countInBox.addItem ("2 Bar Count-in", 3);
     countInBox.setTooltip ("Count-in before recording");
+    countInBox.setWantsKeyboardFocus (false);
     countInBox.onChange = [this]
     {
         using C = te::Edit::CountIn;
@@ -477,6 +478,13 @@ MainComponent::~MainComponent()
     transport = nullptr;
     session = nullptr;
     setLookAndFeel (nullptr);
+}
+
+void MainComponent::parentHierarchyChanged()
+{
+    if (auto w = dynamic_cast<juce::DocumentWindow*> (getTopLevelComponent()))
+        if (session != nullptr)
+            w->setName ("Tapedeck - " + session->getName());
 }
 
 void MainComponent::paint (juce::Graphics& g)
