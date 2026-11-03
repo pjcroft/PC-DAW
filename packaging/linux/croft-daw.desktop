@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Croft DAW
+GenericName=Digital Audio Workstation
+Comment=Record guitars, bass and drums; export stems for mixing
+Exec="Croft DAW" %F
+Icon=croft-daw
+Terminal=false
+Categories=AudioVideo;Audio;Recorder;
+Keywords=DAW;audio;recording;guitar;

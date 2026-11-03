@@ -26,17 +26,17 @@ jobs:
         run: cmake --build build --config Release -j4
 
       - name: Check universal binary
-        run: lipo -info build/Tapedeck_artefacts/Release/Tapedeck.app/Contents/MacOS/Tapedeck
+        run: lipo -info "build/CroftDAW_artefacts/Release/Croft DAW.app/Contents/MacOS/Croft DAW"
 
       - name: Package
         run: |
-          cd build/Tapedeck_artefacts/Release
-          ditto -c -k --keepParent Tapedeck.app Tapedeck-macOS-universal.zip
+          cd build/CroftDAW_artefacts/Release
+          ditto -c -k --keepParent "Croft DAW.app" Croft-DAW-macOS-universal.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Tapedeck-macOS-universal
-          path: build/Tapedeck_artefacts/Release/Tapedeck-macOS-universal.zip
+          name: Croft-DAW-macOS-universal
+          path: build/CroftDAW_artefacts/Release/Croft-DAW-macOS-universal.zip
 
   linux:
     name: Linux (x86_64)
@@ -47,7 +47,8 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libasound2-dev libjack-jackd2-dev \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential cmake pkg-config \
+            libasound2-dev libjack-jackd2-dev jackd2 \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libxcomposite-dev \
             libxi-dev libxrender-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev xvfb
 
@@ -63,15 +64,26 @@ jobs:
       - name: Build
         run: cmake --build build -j4
 
-      - name: Smoke test (demo session + stem export)
+      - name: Test - demo session + stem export
         run: |
-          xvfb-run -a build/Tapedeck_artefacts/Release/Tapedeck --demo --export-stems "$RUNNER_TEMP/stems" | tee export.log
+          xvfb-run -a "build/CroftDAW_artefacts/Release/Croft DAW" --demo --export-stems "$RUNNER_TEMP/stems" | tee export.log
           test "$(grep -c Wrote export.log)" -ge 4
 
+      - name: Test - recording, take lanes and loop takes (virtual JACK device)
+        run: |
+          jackd -r -d dummy -r 44100 -p 256 -C 2 -P 2 &
+          sleep 3
+          xvfb-run -a "build/CroftDAW_artefacts/Release/Croft DAW" --test-record | tee record.log
+          grep -q "\[record-test\] PASS" record.log
+
       - name: Package
-        run: tar -C build/Tapedeck_artefacts/Release -czf Tapedeck-linux-x86_64.tar.gz Tapedeck
+        run: |
+          mkdir -p pkg/croft-daw
+          cp "build/CroftDAW_artefacts/Release/Croft DAW" pkg/croft-daw/
+          cp assets/icon.png packaging/linux/croft-daw.desktop packaging/linux/install.sh pkg/croft-daw/
+          tar -C pkg -czf Croft-DAW-linux-x86_64.tar.gz croft-daw
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Tapedeck-linux-x86_64
-          path: Tapedeck-linux-x86_64.tar.gz
+          name: Croft-DAW-linux-x86_64
+          path: Croft-DAW-linux-x86_64.tar.gz

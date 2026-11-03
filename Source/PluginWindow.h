@@ -113,7 +113,7 @@ private:
 
 //==============================================================================
 /** Tells the engine how to open plugin windows. */
-class TapedeckUIBehaviour : public te::UIBehaviour
+class CroftUIBehaviour : public te::UIBehaviour
 {
 public:
     std::unique_ptr<juce::Component> createPluginWindow (te::PluginWindowState& pws) override
@@ -162,7 +162,7 @@ public:
 
     void showWarningMessage (const juce::String& message) override
     {
-        std::cerr << "Tapedeck: " << message << std::endl;
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Tapedeck", message);
+        std::cerr << "Croft DAW: " << message << std::endl;
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Croft DAW", message);
     }
 };

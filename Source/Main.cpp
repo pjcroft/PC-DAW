@@ -2,18 +2,19 @@
 #include "MainComponent.h"
 #include "PluginWindow.h"
 #include "DemoContent.h"
+#include "Logo.h"
 
 //==============================================================================
-class TapedeckApplication : public juce::JUCEApplication
+class CroftApplication : public juce::JUCEApplication
 {
 public:
-    const juce::String getApplicationName() override       { return "Tapedeck"; }
+    const juce::String getApplicationName() override       { return "Croft DAW"; }
     const juce::String getApplicationVersion() override    { return ProjectInfo::versionString; }
     bool moreThanOneInstanceAllowed() override             { return false; }
 
     void initialise (const juce::String& commandLine) override
     {
-        engine = std::make_unique<te::Engine> ("Tapedeck", std::make_unique<TapedeckUIBehaviour>(), nullptr);
+        engine = std::make_unique<te::Engine> ("Croft DAW", std::make_unique<CroftUIBehaviour>(), nullptr);
 
         // Developer options:
         //   --demo                fill a scratch session with generated guitar/drum clips
@@ -22,12 +23,37 @@ public:
         auto args = juce::StringArray::fromTokens (commandLine, true);
         args.trim();
 
+        //   --render-icon <file.png>   writes the launcher icon (1024 px) and quits
+        if (auto i = args.indexOf ("--render-icon"); i >= 0 && i + 1 < args.size())
+        {
+            auto f = juce::File::getCurrentWorkingDirectory().getChildFile (args[i + 1].unquoted());
+            f.deleteFile();
+            juce::FileOutputStream out (f);
+            juce::PNGImageFormat().writeImageToStream (Logo::createIconImage (1024), out);
+            out.flush();
+            quit();
+            return;
+        }
+
         juce::File initialSession;
 
         if (args.contains ("--demo"))
             initialSession = DemoContent::prepareDemoSession (*engine);
 
         mainWindow = std::make_unique<MainWindow> (*engine, initialSession);
+
+        if (args.contains ("--test-record"))
+        {
+            juce::MessageManager::callAsync ([this]
+            {
+                if (auto mc = dynamic_cast<MainComponent*> (mainWindow->getContentComponent()))
+                    mc->runRecordingSelfTest ([this] (bool ok)
+                    {
+                        testFailed = ! ok;
+                        systemRequestedQuit();
+                    });
+            });
+        }
 
         auto stemsIndex = args.indexOf ("--export-stems");
 
@@ -44,6 +70,11 @@ public:
                 systemRequestedQuit();
             });
         }
+
+        //   --mixer hidden|docked|window
+        if (auto mi = args.indexOf ("--mixer"); mi >= 0 && mi + 1 < args.size())
+            if (auto mc = dynamic_cast<MainComponent*> (mainWindow->getContentComponent()))
+                mc->setMixerModeByName (args[mi + 1]);
 
         auto shotIndex = args.indexOf ("--screenshot");
 
@@ -63,6 +94,9 @@ public:
 
     void shutdown() override
     {
+        if (testFailed)
+            setApplicationReturnValue (1);
+
         mainWindow = nullptr;
         engine = nullptr;
     }
@@ -83,7 +117,7 @@ public:
     {
     public:
         MainWindow (te::Engine& engine, const juce::File& initialSession)
-            : DocumentWindow ("Tapedeck", Theme::bgDeep, DocumentWindow::allButtons)
+            : DocumentWindow ("Croft DAW", Theme::bgDeep, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
             auto* content = new MainComponent (engine, initialSession);
@@ -95,6 +129,7 @@ public:
             setMenuBar (content, 24);
            #endif
 
+            setIcon (Logo::createIconImage (256));
             setResizable (true, true);
             setResizeLimits (900, 500, 10000, 10000);
             centreWithSize (getWidth(), getHeight());
@@ -121,8 +156,9 @@ public:
     };
 
 private:
+    bool testFailed = false;
     std::unique_ptr<te::Engine> engine;
     std::unique_ptr<MainWindow> mainWindow;
 };
 
-START_JUCE_APPLICATION (TapedeckApplication)
+START_JUCE_APPLICATION (CroftApplication)

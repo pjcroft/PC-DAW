@@ -90,7 +90,7 @@ void drawBeatGrid (juce::Graphics& g, te::Edit& edit, const TimelineState& state
 //  TrackHeader
 //==============================================================================
 TrackHeader::TrackHeader (Session& s, te::AudioTrack& t, TimelineState& st)
-    : trackRef (&t), track (t), session (s), state (st)
+    : trackRef (&t), track (t), session (s), state (st), isBus (Session::isBus (t))
 {
     nameLabel.setText (track.getName(), juce::dontSendNotification);
     nameLabel.setEditable (false, true, false);
@@ -117,8 +117,22 @@ TrackHeader::TrackHeader (Session& s, te::AudioTrack& t, TimelineState& st)
     soloButton.onClick = [this] { track.setSolo (! track.isSolo (false)); };
     fxButton.onClick   = [this] { showFxMenu(); };
 
-    for (auto b : { &armButton, &monButton, &muteButton, &soloButton, &fxButton })
+    styleToggle (takesButton, Theme::accent, "Show/hide take lanes (swipe across a take to comp)");
+    takesButton.onClick = [this]
+    {
+        Session::setTakesShown (track, ! Session::areTakesShown (track));
+        state.sendChangeMessage();
+    };
+
+    for (auto b : { &muteButton, &soloButton, &fxButton })
         addAndMakeVisible (b);
+
+    if (! isBus)
+    {
+        addAndMakeVisible (armButton);
+        addAndMakeVisible (monButton);
+        addChildComponent (takesButton);
+    }
 
     inputBox.setTooltip ("Input");
     inputBox.setWantsKeyboardFocus (false);   // keep Space/Enter for the transport
@@ -138,7 +152,8 @@ TrackHeader::TrackHeader (Session& s, te::AudioTrack& t, TimelineState& st)
 
         session.setInputFor (track, chosen);
     };
-    addAndMakeVisible (inputBox);
+    if (! isBus)
+        addAndMakeVisible (inputBox);
 
     volume.setRange (-60.0, 12.0, 0.1);
     volume.setSkewFactorFromMidPoint (-12.0);
@@ -235,6 +250,13 @@ void TrackHeader::paint (juce::Graphics& g)
         g.drawRect (getLocalBounds().withTrimmedLeft (4), 1);
     }
 
+    if (isBus)
+    {
+        g.setColour (Theme::chromeMid);
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText ("AUX BUS " + juce::String (Session::getBusNumber (track) + 1), busLabelArea, juce::Justification::centredLeft);
+    }
+
     // Stereo meter
     auto m = getMeterBounds().toFloat();
     g.setColour (Theme::bgDeep);
@@ -262,12 +284,22 @@ void TrackHeader::resized()
 
     auto row1 = r.removeFromTop (22);
     const int bw = 22;
-    for (auto b : { &armButton, &monButton, &muteButton, &soloButton })
+    std::vector<juce::Component*> rowButtons { &muteButton, &soloButton };
+    if (! isBus)
+        rowButtons.insert (rowButtons.begin(), { &armButton, &monButton });
+    for (auto b : rowButtons)
     {
         b->setBounds (row1.removeFromLeft (bw).reduced (1));
         row1.removeFromLeft (1);
     }
     row1.removeFromLeft (4);
+
+    if (takesButton.isVisible())
+    {
+        takesButton.setBounds (row1.removeFromRight (bw).reduced (1));
+        row1.removeFromRight (2);
+    }
+
     nameLabel.setBounds (row1);
 
     r.removeFromTop (4);
@@ -277,6 +309,7 @@ void TrackHeader::resized()
     fxButton.setBounds (row2.removeFromRight (44).reduced (1));
     row2.removeFromRight (4);
     inputBox.setBounds (row2);
+    busLabelArea = row2;
 
     r.removeFromTop (4);
     volume.setBounds (r.removeFromTop (18));
@@ -294,7 +327,18 @@ void TrackHeader::timerCallback()
     muteButton.setToggleState (track.isMuted (false), juce::dontSendNotification);
     soloButton.setToggleState (track.isSolo (false), juce::dontSendNotification);
 
-    auto numFx = session.getInsertPlugins (track).size();
+    const bool hasLanes = ! isBus && ! session.getTakeLanes (track).isEmpty();
+    if (hasLanes != takesButton.isVisible())
+    {
+        takesButton.setVisible (hasLanes);
+        resized();
+    }
+    takesButton.setToggleState (Session::areTakesShown (track), juce::dontSendNotification);
+
+    int numFx = 0;
+    for (auto p : session.getInsertPlugins (track))
+        if (dynamic_cast<te::AuxReturnPlugin*> (p) == nullptr && dynamic_cast<te::AuxSendPlugin*> (p) == nullptr)
+            ++numFx;
     fxButton.setButtonText (numFx > 0 ? "FX " + juce::String (numFx) : juce::String ("FX"));
     fxButton.setToggleState (numFx > 0, juce::dontSendNotification);
 
@@ -449,7 +493,7 @@ void TrackHeader::showFxMenu()
 //  TrackLane
 //==============================================================================
 TrackLane::TrackLane (Session& s, te::AudioTrack& t, TimelineState& st)
-    : trackRef (&t), track (t), session (s), state (st)
+    : trackRef (&t), track (t), session (s), state (st), isTakeLane (Session::isTakeLane (t))
 {
     track.state.addListener (this);
     rebuildThumbnails();
@@ -592,6 +636,16 @@ void TrackLane::drawClip (juce::Graphics& g, te::Clip& c)
     }
 
     auto full = clipBounds (c);
+
+    if (auto ac = dynamic_cast<te::AudioClipBase*> (&c))
+        drawFades (g, *ac, full);
+
+    if (isTakeLane)
+    {
+        g.setColour (Theme::bgDeep.withAlpha (0.45f));   // takes are dimmed; comped parts light up
+        g.fillRoundedRectangle (full, 3.0f);
+    }
+
     g.setColour (selected ? Theme::accent : base.brighter (0.4f).withAlpha (0.6f));
     g.drawRoundedRectangle (full, 3.0f, selected ? 2.0f : 1.0f);
 }
@@ -600,12 +654,44 @@ void TrackLane::paint (juce::Graphics& g)
 {
     const auto index = te::getAudioTracks (track.edit).indexOf (&track);
     const bool selected = state.selectedTrack == track.itemID;
-    g.fillAll (selected ? Theme::laneSelected : ((index % 2) == 0 ? Theme::laneEven : Theme::laneOdd));
+
+    if (isTakeLane)
+        g.fillAll (Theme::bgDeep);
+    else
+        g.fillAll (selected ? Theme::laneSelected : ((index % 2) == 0 ? Theme::laneEven : Theme::laneOdd));
 
     drawBeatGrid (g, track.edit, state, getLocalBounds(), false);
 
     for (auto c : track.getClips())
         drawClip (g, *c);
+
+    if (isTakeLane)
+    {
+        // Light up the parts of this take that are used in the comp
+        if (auto parent = session.getTakeLaneParent (track))
+        {
+            for (auto c : parent->getClips())
+            {
+                if (Session::getCompSource (*c) != track.itemID)
+                    continue;
+
+                auto x1 = state.timeToX (c->getPosition().getStart().inSeconds());
+                auto x2 = state.timeToX (c->getPosition().getEnd().inSeconds());
+                g.setColour (Theme::accent.withAlpha (0.22f));
+                g.fillRect (x1, 1.0f, x2 - x1, (float) getHeight() - 2.0f);
+                g.setColour (Theme::accent);
+                g.fillRect (x1, 1.0f, x2 - x1, 2.0f);
+            }
+        }
+
+        if (swiping)
+        {
+            auto x1 = state.timeToX (juce::jmin (swipeStart, swipeEnd));
+            auto x2 = state.timeToX (juce::jmax (swipeStart, swipeEnd));
+            g.setColour (Theme::accent.withAlpha (0.35f));
+            g.fillRect (x1, 0.0f, x2 - x1, (float) getHeight());
+        }
+    }
 
     // Take being recorded
     if (wasRecording && recordingThumb != nullptr)
@@ -679,6 +765,27 @@ void TrackLane::mouseDown (const juce::MouseEvent& e)
     auto clickTime = state.xToTime (e.position.x);
     auto clip = clipAt (e.x);
 
+    if (isTakeLane && ! e.mods.isPopupMenu())
+    {
+        swiping = true;
+        swipeStart = swipeEnd = clickTime;
+        repaint();
+        return;
+    }
+
+    if (clip != nullptr && ! e.mods.isPopupMenu())
+    {
+        fadeDrag = hitFadeHandle (*clip, e.position);
+
+        if (fadeDrag != FadeDrag::none)
+        {
+            fadeClip = clip;
+            state.selectedClip = clip->itemID;
+            state.sendChangeMessage();
+            return;
+        }
+    }
+
     state.selectedTrack = track.itemID;
     state.selectedClip = clip != nullptr ? clip->itemID : te::EditItemID();
     state.sendChangeMessage();
@@ -706,6 +813,31 @@ void TrackLane::mouseDown (const juce::MouseEvent& e)
 
 void TrackLane::mouseDrag (const juce::MouseEvent& e)
 {
+    if (swiping)
+    {
+        swipeEnd = juce::jmax (0.0, state.xToTime (e.position.x));
+        repaint();
+        return;
+    }
+
+    if (fadeDrag != FadeDrag::none && fadeClip != nullptr)
+    {
+        if (auto ac = dynamic_cast<te::AudioClipBase*> (fadeClip.get()))
+        {
+            auto pos = ac->getPosition();
+            auto t = juce::jlimit (pos.getStart().inSeconds(), pos.getEnd().inSeconds(), state.xToTime (e.position.x));
+
+            if (fadeDrag == FadeDrag::fadeIn)
+                ac->setFadeIn (te::TimeDuration::fromSeconds (t - pos.getStart().inSeconds()));
+            else
+                ac->setFadeOut (te::TimeDuration::fromSeconds (pos.getEnd().inSeconds() - t));
+
+            repaint();
+        }
+
+        return;
+    }
+
     if (draggingClip == nullptr || e.getDistanceFromDragStart() < 3)
         return;
 
@@ -716,13 +848,143 @@ void TrackLane::mouseDrag (const juce::MouseEvent& e)
     draggingClip->setStart (te::TimePosition::fromSeconds (newStart), false, true);
 }
 
-void TrackLane::mouseUp (const juce::MouseEvent&)
+void TrackLane::mouseUp (const juce::MouseEvent& e)
 {
     draggingClip = nullptr;
+    fadeDrag = FadeDrag::none;
+    fadeClip = nullptr;
+
+    if (swiping)
+    {
+        swiping = false;
+        auto a = juce::jmin (swipeStart, swipeEnd), b = juce::jmax (swipeStart, swipeEnd);
+
+        // A click (no swipe) picks this take for the whole clip under the mouse
+        if (e.getDistanceFromDragStart() < 3)
+        {
+            if (auto c = clipAt (e.x))
+            {
+                a = c->getPosition().getStart().inSeconds();
+                b = c->getPosition().getEnd().inSeconds();
+            }
+            else
+            {
+                b = a;
+            }
+        }
+
+        if (b > a)
+        {
+            track.edit.getUndoManager().beginNewTransaction ("Comp");
+            session.compFromLane (track, a, b);
+        }
+
+        repaint();
+    }
+}
+
+void TrackLane::mouseMove (const juce::MouseEvent& e)
+{
+    if (isTakeLane)
+    {
+        setMouseCursor (juce::MouseCursor::IBeamCursor);
+        return;
+    }
+
+    auto cursor = juce::MouseCursor::NormalCursor;
+
+    if (auto c = clipAt (e.x))
+        if (hitFadeHandle (*c, e.position) != FadeDrag::none)
+            cursor = juce::MouseCursor::LeftRightResizeCursor;
+
+    setMouseCursor (cursor);
+}
+
+TrackLane::FadeDrag TrackLane::hitFadeHandle (te::Clip& c, juce::Point<float> p) const
+{
+    auto ac = dynamic_cast<te::AudioClipBase*> (&c);
+
+    if (ac == nullptr || isTakeLane || p.y > 18.0f)
+        return FadeDrag::none;
+
+    auto r = clipBounds (c);
+    auto inX  = state.timeToX (c.getPosition().getStart().inSeconds() + ac->getFadeIn().inSeconds());
+    auto outX = state.timeToX (c.getPosition().getEnd().inSeconds() - ac->getFadeOut().inSeconds());
+
+    if (std::abs (p.x - inX) < 7.0f && p.x < r.getCentreX() + 7.0f)   return FadeDrag::fadeIn;
+    if (std::abs (p.x - outX) < 7.0f && p.x > r.getCentreX() - 7.0f)  return FadeDrag::fadeOut;
+    return FadeDrag::none;
+}
+
+void TrackLane::drawFades (juce::Graphics& g, te::AudioClipBase& ac, juce::Rectangle<float> r)
+{
+    auto pos = ac.getPosition();
+    auto top = r.getY() + 14.0f, bottom = r.getBottom();
+
+    auto drawFade = [&] (double startT, double endT, bool isIn, te::AudioFadeCurve::Type type)
+    {
+        auto x1 = state.timeToX (startT), x2 = state.timeToX (endT);
+
+        if (x2 - x1 < 1.0f)
+            return;
+
+        juce::Path curve, shade;
+        const int steps = 24;
+
+        for (int i = 0; i <= steps; ++i)
+        {
+            auto alpha = (float) i / (float) steps;
+            auto gain = te::AudioFadeCurve::alphaToGainForType (type, isIn ? alpha : 1.0f - alpha);
+            auto x = x1 + alpha * (x2 - x1);
+            auto y = bottom - gain * (bottom - top);
+
+            if (i == 0) curve.startNewSubPath (x, y); else curve.lineTo (x, y);
+        }
+
+        shade = curve;
+        shade.lineTo (isIn ? x1 : x2, top);
+        shade.lineTo (isIn ? x1 : x1, top);
+        shade.closeSubPath();
+
+        // Darken the faded-away region (above the curve)
+        juce::Path above (curve);
+        above.lineTo (x2, top);
+        above.lineTo (x1, top);
+        above.closeSubPath();
+        g.setColour (Theme::bgDeep.withAlpha (0.55f));
+        g.fillPath (above);
+
+        g.setColour (Theme::chromeHi.withAlpha (0.9f));
+        g.strokePath (curve, juce::PathStrokeType (1.2f));
+    };
+
+    auto fadeIn = ac.getFadeIn().inSeconds(), fadeOut = ac.getFadeOut().inSeconds();
+    drawFade (pos.getStart().inSeconds(), pos.getStart().inSeconds() + fadeIn, true, ac.getFadeInType());
+    drawFade (pos.getEnd().inSeconds() - fadeOut, pos.getEnd().inSeconds(), false, ac.getFadeOutType());
+
+    if (isTakeLane)
+        return;
+
+    // Handles
+    auto handle = [&] (double t)
+    {
+        auto x = state.timeToX (t);
+        auto h = juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ x, r.getY() + 7.0f });
+        g.setGradientFill (Theme::chromeGradient (h));
+        g.fillRect (h);
+        g.setColour (Theme::chromeEdge);
+        g.drawRect (h, 1.0f);
+    };
+
+    handle (pos.getStart().inSeconds() + fadeIn);
+    handle (pos.getEnd().inSeconds() - fadeOut);
 }
 
 void TrackLane::mouseDoubleClick (const juce::MouseEvent& e)
 {
+    if (isTakeLane)
+        return;
+
     // Double-click empty space on an instrument track = new 4-bar MIDI clip
     if (clipAt (e.x) != nullptr)
         return;
@@ -766,11 +1028,59 @@ void TrackLane::showClipMenu (te::Clip* clip, double time)
     juce::PopupMenu m;
     auto playhead = track.edit.getTransport().getPosition();
 
+    if (isTakeLane)
+    {
+        if (clip != nullptr)
+            m.addItem (20, "Use This Take for the Whole Clip");
+        m.addItem (21, "Delete This Take Lane");
+        m.addItem (22, "Keep Comp, Delete All Take Lanes");
+
+        m.showMenuAsync (juce::PopupMenu::Options(),
+            [sp = SafePointer<TrackLane> (this), clipPtr = te::Clip::Ptr (clip)] (int result)
+            {
+                if (sp == nullptr) return;
+                auto& s = sp->session;
+                auto* lane = &sp->track;
+                s.edit->getUndoManager().beginNewTransaction();
+
+                if (result == 20 && clipPtr != nullptr)
+                    s.compFromLane (*lane, clipPtr->getPosition().getStart().inSeconds(), clipPtr->getPosition().getEnd().inSeconds());
+                else if (result == 21)
+                    juce::MessageManager::callAsync ([&s, lane] { s.deleteTrack (*lane); });
+                else if (result == 22)
+                    if (auto parent = s.getTakeLaneParent (*lane))
+                        juce::MessageManager::callAsync ([&s, parent] { s.deleteTakeLanes (*parent); });
+            });
+        return;
+    }
+
     if (clip != nullptr)
     {
         auto range = clip->getPosition().time;
         m.addItem (1, "Split at Playhead", range.contains (playhead) && range.getStart() != playhead);
         m.addItem (2, "Delete Clip");
+
+        if (auto ac = dynamic_cast<te::AudioClipBase*> (clip))
+        {
+            auto shapes = [] (juce::PopupMenu& sub, int base, te::AudioFadeCurve::Type current)
+            {
+                sub.addItem (base + 1, "Linear",  true, current == te::AudioFadeCurve::linear);
+                sub.addItem (base + 2, "Convex (fast)", true, current == te::AudioFadeCurve::convex);
+                sub.addItem (base + 3, "Concave (slow)", true, current == te::AudioFadeCurve::concave);
+                sub.addItem (base + 4, "S-Curve", true, current == te::AudioFadeCurve::sCurve);
+            };
+
+            juce::PopupMenu fadeIn, fadeOut;
+            shapes (fadeIn, 100, ac->getFadeInType());
+            shapes (fadeOut, 110, ac->getFadeOutType());
+            m.addSeparator();
+            m.addSubMenu ("Fade In Shape", fadeIn);
+            m.addSubMenu ("Fade Out Shape", fadeOut);
+            m.addItem (120, "Quick Fades (10 ms)");
+            m.addItem (121, "Remove Fades");
+            m.addItem (122, "Auto-Crossfade Overlaps", true, ac->getAutoCrossfade());
+        }
+
         m.addSeparator();
     }
 
@@ -780,6 +1090,16 @@ void TrackLane::showClipMenu (te::Clip* clip, double time)
         [sp = SafePointer<TrackLane> (this), clipPtr = te::Clip::Ptr (clip), time, playhead] (int result)
         {
             if (sp == nullptr) return;
+
+            if (auto ac = dynamic_cast<te::AudioClipBase*> (clipPtr.get()))
+            {
+                if (result > 100 && result <= 104) ac->setFadeInType ((te::AudioFadeCurve::Type) (result - 100));
+                if (result > 110 && result <= 114) ac->setFadeOutType ((te::AudioFadeCurve::Type) (result - 110));
+                if (result == 120) { ac->setFadeIn (te::TimeDuration::fromSeconds (0.01)); ac->setFadeOut (te::TimeDuration::fromSeconds (0.01)); }
+                if (result == 121) { ac->setFadeIn ({}); ac->setFadeOut ({}); }
+                if (result == 122) { ac->setAutoCrossfade (! ac->getAutoCrossfade()); ac->updateAutoCrossfadesAsync (true); }
+                if (result >= 100) { sp->repaint(); return; }
+            }
 
             if (result == 1 && clipPtr != nullptr)
                 sp->track.splitClip (*clipPtr, playhead);
@@ -800,6 +1120,9 @@ void TrackLane::showClipMenu (te::Clip* clip, double time)
 
 bool TrackLane::isInterestedInFileDrag (const juce::StringArray& files)
 {
+    if (isTakeLane)
+        return false;
+
     for (auto& f : files)
         if (juce::File (f).hasFileExtension ("wav;aif;aiff;flac;mp3;ogg;mid;midi"))
             return true;
@@ -894,4 +1217,61 @@ void Ruler::mouseUp (const juce::MouseEvent& e)
             transport.setPosition (te::TimePosition::fromSeconds (
                 e.mods.isShiftDown() ? juce::jmax (0.0, state.xToTime (e.position.x)) : dragStart));
     }
+}
+
+//==============================================================================
+//  TakeLaneHeader
+//==============================================================================
+TakeLaneHeader::TakeLaneHeader (Session& s, te::AudioTrack& l)
+    : trackRef (&l), lane (l), session (s)
+{
+    setTooltip ("Swipe across this take on the right to use it in the comp. Right-click for options.");
+}
+
+void TakeLaneHeader::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds();
+    g.setColour (Theme::bgDeep);
+    g.fillRect (r);
+
+    // Indent line linking the lane to its track
+    g.setColour (Theme::chromeEdge);
+    g.fillRect (16, 0, 2, getHeight());
+    g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+    g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
+
+    bool used = false;
+    if (auto parent = session.getTakeLaneParent (lane))
+        for (auto c : parent->getClips())
+            if (Session::getCompSource (*c) == lane.itemID)
+                used = true;
+
+    g.setColour (used ? Theme::accent : Theme::chromeLo);
+    g.fillEllipse (26.0f, (float) getHeight() / 2.0f - 4.0f, 8.0f, 8.0f);
+
+    g.setColour (used ? Theme::textBright : Theme::textDim);
+    g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    g.drawText (lane.getName(), r.withTrimmedLeft (42), juce::Justification::centredLeft);
+}
+
+void TakeLaneHeader::mouseDown (const juce::MouseEvent& e)
+{
+    if (! e.mods.isPopupMenu())
+        return;
+
+    juce::PopupMenu m;
+    m.addItem (1, "Delete This Take Lane");
+    m.addItem (2, "Keep Comp, Delete All Take Lanes");
+    m.showMenuAsync ({}, [sp = SafePointer<TakeLaneHeader> (this)] (int r)
+    {
+        if (sp == nullptr || r == 0) return;
+        auto& s = sp->session;
+        auto* lane = &sp->lane;
+        s.edit->getUndoManager().beginNewTransaction();
+
+        if (r == 1)
+            juce::MessageManager::callAsync ([&s, lane] { s.deleteTrack (*lane); });
+        else if (auto parent = s.getTakeLaneParent (*lane))
+            juce::MessageManager::callAsync ([&s, parent] { s.deleteTakeLanes (*parent); });
+    });
 }

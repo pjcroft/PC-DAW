@@ -13,7 +13,7 @@ if(APPLE)
     endif()
 endif()
 
-project(Tapedeck VERSION 0.1.0 LANGUAGES C CXX)
+project(CroftDAW VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,28 +48,36 @@ FetchContent_MakeAvailable(juce tracktion)
 # ---------------------------------------------------------------------------
 # The app
 # ---------------------------------------------------------------------------
-juce_add_gui_app(Tapedeck
-    PRODUCT_NAME                "Tapedeck"
-    COMPANY_NAME                "Tapedeck"
-    BUNDLE_ID                   "com.tapedeck.app"
+# App icon (rendered from Source/Logo.h with: "Croft DAW" --render-icon assets/icon.png)
+set(CROFT_ICON_ARGS "")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png")
+    set(CROFT_ICON_ARGS ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png")
+endif()
+
+juce_add_gui_app(CroftDAW
+    ${CROFT_ICON_ARGS}
+    PRODUCT_NAME                "Croft DAW"
+    COMPANY_NAME                "Croft"
+    BUNDLE_ID                   "com.croft.daw"
     VERSION                     ${PROJECT_VERSION}
     MICROPHONE_PERMISSION_ENABLED TRUE
-    MICROPHONE_PERMISSION_TEXT  "Tapedeck needs audio input access to record your instruments."
+    MICROPHONE_PERMISSION_TEXT  "Croft DAW needs audio input access to record your instruments."
     NEEDS_CURL                  FALSE
     NEEDS_WEB_BROWSER           FALSE
     PLUGINHOST_AU               TRUE)
 
-juce_generate_juce_header(Tapedeck)
+juce_generate_juce_header(CroftDAW)
 
-target_sources(Tapedeck PRIVATE
+target_sources(CroftDAW PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
     Source/TrackComponents.cpp
-    Source/Session.cpp)
+    Source/Session.cpp
+    Source/MixerComponents.cpp)
 
-target_include_directories(Tapedeck PRIVATE Source)
+target_include_directories(CroftDAW PRIVATE Source)
 
-target_compile_definitions(Tapedeck PRIVATE
+target_compile_definitions(CroftDAW PRIVATE
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_AU=1
     JUCE_PLUGINHOST_LV2=0
@@ -81,7 +89,7 @@ target_compile_definitions(Tapedeck PRIVATE
     JUCE_DISPLAY_SPLASH_SCREEN=0
     TRACKTION_ENABLE_TIMESTRETCH_SOUNDTOUCH=1)
 
-target_link_libraries(Tapedeck PRIVATE
+target_link_libraries(CroftDAW PRIVATE
     tracktion::tracktion_core
     tracktion::tracktion_engine
     tracktion::tracktion_graph
@@ -91,18 +99,19 @@ target_link_libraries(Tapedeck PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags)
 
-set_target_properties(Tapedeck PROPERTIES
+set_target_properties(CroftDAW PROPERTIES
     C_VISIBILITY_PRESET hidden
     CXX_VISIBILITY_PRESET hidden)
 
 if(APPLE)
-    target_compile_options(Tapedeck PRIVATE -fno-aligned-allocation)
+    target_compile_options(CroftDAW PRIVATE -fno-aligned-allocation)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_libraries(Tapedeck PRIVATE atomic)
+    target_link_libraries(CroftDAW PRIVATE atomic)
+    target_compile_definitions(CroftDAW PRIVATE JUCE_JACK=1)   # JACK / PipeWire-JACK support
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    target_compile_options(Tapedeck PRIVATE -Wno-unknown-pragmas)
+    target_compile_options(CroftDAW PRIVATE -Wno-unknown-pragmas)
 endif()

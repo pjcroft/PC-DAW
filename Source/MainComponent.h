@@ -4,6 +4,8 @@
 #include "Session.h"
 #include "Theme.h"
 #include "TrackComponents.h"
+#include "MixerComponents.h"
+#include "Logo.h"
 
 //==============================================================================
 /** Chrome button that draws a vector icon instead of text. */
@@ -88,7 +90,7 @@ class ArrangeView : public juce::Component,
                     private juce::Timer
 {
 public:
-    static constexpr int headerWidth = 300, trackHeight = 84, rulerHeight = 26;
+    static constexpr int headerWidth = 300, trackHeight = 84, takeLaneHeight = 52, rulerHeight = 26;
 
     ArrangeView (Session&, TimelineState&);
     ~ArrangeView() override;
@@ -116,8 +118,11 @@ private:
     juce::ScrollBar hScroll { false };
     PlayheadOverlay playhead;
 
-    juce::OwnedArray<TrackHeader> headers;
+    juce::OwnedArray<juce::Component> headers;   // TrackHeader or TakeLaneHeader
     juce::OwnedArray<TrackLane> lanes;
+    juce::Array<int> rowHeights;
+    juce::String rowKey;
+    juce::String computeRowKey() const;
 
     void layoutTracks();
     void updateScrollBar();
@@ -156,6 +161,13 @@ public:
     /** Renders stems into a folder and reports in the status bar. Returns the files written. */
     juce::Array<juce::File> exportStemsTo (const juce::File& folder);
 
+    /** Developer self-test: records twice over the same bars, then loop-records, and prints
+        what ended up on the track and its take lanes. Needs a working audio input (e.g. JACK). */
+    void runRecordingSelfTest (std::function<void (bool)> onDone);
+
+    /** "hidden", "docked" or "window" (used by --mixer). */
+    void setMixerModeByName (const juce::String&);
+
     /** Writes a PNG of the window (used for --screenshot). */
     void saveScreenshot (const juce::File&);
 
@@ -166,6 +178,7 @@ private:
         cmd_undo, cmd_redo, cmd_deleteSelection, cmd_splitAtPlayhead, cmd_toggleSnap,
         cmd_addTrack, cmd_addInstrumentTrack, cmd_deleteTrack, cmd_importFile,
         cmd_play, cmd_record, cmd_returnToStart, cmd_toggleLoop, cmd_toggleClick,
+        cmd_mixerHidden, cmd_mixerDocked, cmd_mixerWindowed, cmd_addBus,
         cmd_audioSettings, cmd_pluginManager,
         cmd_zoomIn, cmd_zoomOut,
         cmd_recentBase = 1000
@@ -180,6 +193,17 @@ private:
     std::unique_ptr<TransportBar> transport;
     std::unique_ptr<ArrangeView> arrange;
     juce::Label statusBar;
+
+    // Mixer: docked below the tracks, in its own window, or hidden
+    std::unique_ptr<MixerPanel> mixer;
+    std::unique_ptr<juce::DocumentWindow> mixerWindow;
+    MixerPanel::Mode mixerMode = MixerPanel::Mode::hidden;
+    int dockedMixerHeight = 470;
+    std::unique_ptr<juce::Component> dockDivider;
+
+    void setMixerMode (MixerPanel::Mode);
+    void createMixer();
+    void destroyMixer();
 
     juce::ApplicationProperties appProperties;
 

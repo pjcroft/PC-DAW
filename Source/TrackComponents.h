@@ -54,8 +54,11 @@ private:
     TimelineState& state;
 
     juce::Label nameLabel;
-    juce::TextButton armButton { "R" }, monButton { "I" }, muteButton { "M" }, soloButton { "S" }, fxButton { "FX" };
+    juce::TextButton armButton { "R" }, monButton { "I" }, muteButton { "M" }, soloButton { "S" }, fxButton { "FX" },
+                     takesButton { "T" };
     juce::ComboBox inputBox;
+    const bool isBus;
+    juce::Rectangle<int> busLabelArea;
     juce::Slider volume { juce::Slider::LinearHorizontal, juce::Slider::NoTextBox };
     juce::Slider pan    { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
 
@@ -83,6 +86,7 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
@@ -111,6 +115,18 @@ private:
     double dragStartClipTime = 0, dragStartMouseTime = 0;
     int dropIndicatorX = -1;
 
+    // Take lanes: swipe to comp
+    const bool isTakeLane;
+    bool swiping = false;
+    double swipeStart = 0, swipeEnd = 0;
+
+    // Fade handles
+    enum class FadeDrag { none, fadeIn, fadeOut };
+    FadeDrag fadeDrag = FadeDrag::none;
+    te::Clip::Ptr fadeClip;
+    FadeDrag hitFadeHandle (te::Clip&, juce::Point<float>) const;
+    void drawFades (juce::Graphics&, te::AudioClipBase&, juce::Rectangle<float>);
+
     te::Clip* clipAt (int x) const;
     juce::Rectangle<float> clipBounds (te::Clip&) const;
     double snap (double seconds) const;
@@ -123,6 +139,23 @@ private:
     void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override      { triggerAsyncUpdate(); }
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override { triggerAsyncUpdate(); }
     void handleAsyncUpdate() override;
+};
+
+//==============================================================================
+/** Left-hand header for a take lane: its name, and a menu to use/delete it. */
+class TakeLaneHeader : public juce::Component,
+                       public juce::SettableTooltipClient
+{
+public:
+    TakeLaneHeader (Session&, te::AudioTrack& lane);
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+
+    te::Track::Ptr trackRef;
+    te::AudioTrack& lane;
+
+private:
+    Session& session;
 };
 
 //==============================================================================

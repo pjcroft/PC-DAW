@@ -207,11 +207,8 @@ void TransportBar::paint (juce::Graphics& g)
     Theme::fillPanel (g, getLocalBounds().toFloat());
 
     // Logo
-    auto logo = getLocalBounds().removeFromLeft (150).reduced (14, 0).toFloat();
-    juce::ColourGradient chrome (Theme::chromeHi, 0, logo.getY() + 18, Theme::chromeLo, 0, logo.getY() + 40, false);
-    g.setGradientFill (chrome);
-    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-    g.drawText ("TAPEDECK", logo.withHeight (40.0f).withY (8.0f), juce::Justification::centredLeft);
+    Logo::drawBadge (g, juce::Rectangle<float> (10.0f, 6.0f, 52.0f, 52.0f));
+    Logo::drawWordmark (g, juce::Rectangle<float> (70.0f, 9.0f, 120.0f, 30.0f));
 
     // LCD-style counter
     auto lcd = displayArea.toFloat();
@@ -250,8 +247,8 @@ void TransportBar::paint (juce::Graphics& g)
 void TransportBar::resized()
 {
     auto r = getLocalBounds().reduced (8, 0);
-    r.removeFromLeft (150);
-    sessionName.setBounds (14, getHeight() - 20, 140, 16);
+    r.removeFromLeft (196);
+    sessionName.setBounds (70, getHeight() - 20, 126, 16);
 
     auto row = r.withSizeKeepingCentre (r.getWidth(), 36);
     for (auto b : { &rewindButton, &stopButton, &playButton, &recordButton })
@@ -306,38 +303,74 @@ ArrangeView::~ArrangeView()
     state.removeChangeListener (this);
 }
 
+juce::String ArrangeView::computeRowKey() const
+{
+    juce::String key;
+
+    for (auto t : session.getTracks())
+    {
+        key << t->itemID.toString() << ",";
+
+        if (Session::areTakesShown (*t))
+            for (auto lane : session.getTakeLanes (*t))
+                key << "L" << lane->itemID.toString() << ",";
+    }
+
+    return key;
+}
+
 void ArrangeView::rebuildTracks()
 {
     headers.clear();
     lanes.clear();
+    rowHeights.clear();
 
     for (auto t : session.getTracks())
     {
-        auto h = headers.add (new TrackHeader (session, *t, state));
-        auto l = lanes.add (new TrackLane (session, *t, state));
-        trackList.addAndMakeVisible (h);
-        trackList.addAndMakeVisible (l);
+        trackList.addAndMakeVisible (headers.add (new TrackHeader (session, *t, state)));
+        trackList.addAndMakeVisible (lanes.add (new TrackLane (session, *t, state)));
+        rowHeights.add (trackHeight);
+
+        if (Session::areTakesShown (*t))
+        {
+            for (auto lane : session.getTakeLanes (*t))
+            {
+                trackList.addAndMakeVisible (headers.add (new TakeLaneHeader (session, *lane)));
+                trackList.addAndMakeVisible (lanes.add (new TrackLane (session, *lane, state)));
+                rowHeights.add (takeLaneHeight);
+            }
+        }
     }
 
+    rowKey = computeRowKey();
     layoutTracks();
+    repaint (0, 0, headerWidth, rulerHeight);
 }
 
 void ArrangeView::refreshInputs()
 {
     for (auto h : headers)
-        h->refreshInputs();
+        if (auto th = dynamic_cast<TrackHeader*> (h))
+            th->refreshInputs();
 }
 
 void ArrangeView::layoutTracks()
 {
+    int total = 0;
+    for (auto h : rowHeights) total += h;
+
     auto w = viewport.getMaximumVisibleWidth();
-    auto contentH = juce::jmax (viewport.getMaximumVisibleHeight(), headers.size() * trackHeight + trackHeight);
+    auto contentH = juce::jmax (viewport.getMaximumVisibleHeight(), total + trackHeight);
     trackList.setSize (juce::jmax (w, headerWidth + 50), contentH);
+
+    int y = 0;
 
     for (int i = 0; i < headers.size(); ++i)
     {
-        headers[i]->setBounds (0, i * trackHeight, headerWidth, trackHeight);
-        lanes[i]->setBounds (headerWidth, i * trackHeight, trackList.getWidth() - headerWidth, trackHeight);
+        auto h = rowHeights[i];
+        headers[i]->setBounds (0, y, headerWidth, h);
+        lanes[i]->setBounds (headerWidth, y, trackList.getWidth() - headerWidth, h);
+        y += h;
     }
 }
 
@@ -349,7 +382,7 @@ void ArrangeView::paint (juce::Graphics& g)
     Theme::fillPanel (g, corner.toFloat());
     g.setColour (Theme::textDim);
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    g.drawText ("TRACKS  " + juce::String (headers.size()), corner.reduced (10, 0), juce::Justification::centredLeft);
+    g.drawText ("TRACKS  " + juce::String (session.getRecordTracks().size()), corner.reduced (10, 0), juce::Justification::centredLeft);
     g.drawText (state.snapToBeats ? "SNAP: BEAT" : "SNAP: OFF", corner.reduced (10, 0), juce::Justification::centredRight);
     g.setColour (Theme::chromeEdge);
     g.drawVerticalLine (headerWidth - 1, 0.0f, (float) rulerHeight);
@@ -398,6 +431,12 @@ void ArrangeView::scrollBarMoved (juce::ScrollBar*, double newStart)
 
 void ArrangeView::changeListenerCallback (juce::ChangeBroadcaster*)
 {
+    if (computeRowKey() != rowKey)
+    {
+        rebuildTracks();
+        return;
+    }
+
     ruler.repaint();
 
     for (auto h : headers) h->repaint();
@@ -446,9 +485,9 @@ MainComponent::MainComponent (te::Engine& e, const juce::File& initialSession)
     : engine (e)
 {
     juce::PropertiesFile::Options opts;
-    opts.applicationName     = "Tapedeck";
+    opts.applicationName     = "Croft DAW";
     opts.filenameSuffix      = "settings";
-    opts.folderName          = "Tapedeck";
+    opts.folderName          = "Croft DAW";
     opts.osxLibrarySubFolder = "Application Support";
     appProperties.setStorageParameters (opts);
 
@@ -464,16 +503,19 @@ MainComponent::MainComponent (te::Engine& e, const juce::File& initialSession)
     engine.getDeviceManager().addChangeListener (this);
 
     auto last = juce::File (appProperties.getUserSettings()->getValue ("lastSession"));
+    mixerMode = (MixerPanel::Mode) juce::jlimit (0, 2, appProperties.getUserSettings()->getIntValue ("mixerMode", (int) MixerPanel::Mode::docked));
+    dockedMixerHeight = appProperties.getUserSettings()->getIntValue ("mixerHeight", 470);
     openSession (initialSession.existsAsFile() ? initialSession
                                                : last.existsAsFile() ? last : Session::makeNewSessionFile ("Untitled"));
 
-    setStatus ("Ready. Space = play/stop, R = record, Enter = return to start, L = loop, C = click.");
-    setSize (1400, 860);
+    setStatus ("Ready. Space = play/stop, R = record, Enter = return to start, L = loop, C = click, X = mixer.");
+    setSize (1440, 940);
 }
 
 MainComponent::~MainComponent()
 {
     engine.getDeviceManager().removeChangeListener (this);
+    destroyMixer();
     arrange = nullptr;
     transport = nullptr;
     session = nullptr;
@@ -484,7 +526,7 @@ void MainComponent::parentHierarchyChanged()
 {
     if (auto w = dynamic_cast<juce::DocumentWindow*> (getTopLevelComponent()))
         if (session != nullptr)
-            w->setName ("Tapedeck - " + session->getName());
+            w->setName ("Croft DAW - " + session->getName());
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -498,7 +540,147 @@ void MainComponent::resized()
 
     if (transport) transport->setBounds (r.removeFromTop (64));
     statusBar.setBounds (r.removeFromBottom (22));
+
+    if (mixerMode == MixerPanel::Mode::docked && mixer != nullptr)
+    {
+        // Clamp for this layout only, so a tiny window at start-up doesn't overwrite the saved height
+        auto h = juce::jlimit (200, juce::jmax (200, r.getHeight() - 120), dockedMixerHeight);
+        mixer->setBounds (r.removeFromBottom (h));
+        if (dockDivider) dockDivider->setBounds (r.removeFromBottom (6));
+    }
+
     if (arrange) arrange->setBounds (r);
+}
+
+//==============================================================================
+namespace
+{
+    /** Drag bar between the tracks and the docked mixer. */
+    struct DockDivider : public juce::Component
+    {
+        std::function<void (int)> onDrag;
+        int startHeight = 0;
+        std::function<int()> getHeightNow;
+
+        DockDivider() { setMouseCursor (juce::MouseCursor::UpDownResizeCursor); }
+        void paint (juce::Graphics& g) override
+        {
+            g.setGradientFill (Theme::chromeGradient (getLocalBounds().toFloat()));
+            g.fillAll();
+            g.setColour (Theme::chromeEdge);
+            for (int i = -1; i <= 1; ++i)
+                g.fillRect (getWidth() / 2 + i * 8 - 2, 2, 4, 2);
+        }
+        void mouseDown (const juce::MouseEvent&) override  { startHeight = getHeightNow(); }
+        void mouseDrag (const juce::MouseEvent& e) override { onDrag (startHeight - e.getDistanceFromDragStartY()); }
+    };
+
+    /** The pop-out mixer window. Closing it hides the mixer. */
+    struct MixerWindow : public juce::DocumentWindow
+    {
+        std::function<void()> onClose;
+
+        MixerWindow() : DocumentWindow ("Croft DAW - Mixer", Theme::bgDeep, DocumentWindow::allButtons)
+        {
+            setUsingNativeTitleBar (true);
+            setResizable (true, true);
+            setResizeLimits (400, 300, 10000, 10000);
+        }
+
+        void closeButtonPressed() override { if (onClose) onClose(); }
+    };
+}
+
+void MainComponent::createMixer()
+{
+    if (mixer != nullptr || session == nullptr)
+        return;
+
+    mixer = std::make_unique<MixerPanel> (*session, timeline);
+    mixer->onPopOut = [this] { setMixerMode (MixerPanel::Mode::window); };
+    mixer->onDock   = [this] { setMixerMode (MixerPanel::Mode::docked); };
+    mixer->onHide   = [this] { setMixerMode (MixerPanel::Mode::hidden); };
+}
+
+void MainComponent::destroyMixer()
+{
+    if (mixerWindow != nullptr)
+    {
+        appProperties.getUserSettings()->setValue ("mixerWindowState", mixerWindow->getWindowStateAsString());
+        mixerWindow->clearContentComponent();
+        mixerWindow = nullptr;
+    }
+
+    if (mixer != nullptr)
+        removeChildComponent (mixer.get());
+
+    mixer = nullptr;
+}
+
+void MainComponent::setMixerMode (MixerPanel::Mode newMode)
+{
+    // Tear down the old placement
+    if (mixerWindow != nullptr)
+    {
+        appProperties.getUserSettings()->setValue ("mixerWindowState", mixerWindow->getWindowStateAsString());
+        mixerWindow->clearContentComponent();
+        mixerWindow = nullptr;
+    }
+
+    if (mixer != nullptr && mixer->getParentComponent() == this)
+        removeChildComponent (mixer.get());
+
+    if (dockDivider != nullptr)
+    {
+        removeChildComponent (dockDivider.get());
+        dockDivider = nullptr;
+    }
+
+    mixerMode = newMode;
+    appProperties.getUserSettings()->setValue ("mixerMode", (int) newMode);
+
+    if (newMode == MixerPanel::Mode::hidden)
+    {
+        resized();
+        menuItemsChanged();
+        return;
+    }
+
+    createMixer();
+    mixer->setMode (newMode);
+
+    if (newMode == MixerPanel::Mode::docked)
+    {
+        auto divider = std::make_unique<DockDivider>();
+        divider->getHeightNow = [this] { return dockedMixerHeight; };
+        divider->onDrag = [this] (int h)
+        {
+            dockedMixerHeight = juce::jlimit (200, juce::jmax (200, getHeight() - 64 - 22 - 120), h);
+            resized();
+        };
+        addAndMakeVisible (*divider);
+        dockDivider = std::move (divider);
+
+        addAndMakeVisible (*mixer);
+    }
+    else
+    {
+        auto w = std::make_unique<MixerWindow>();
+        w->onClose = [this] { juce::MessageManager::callAsync ([sp = SafePointer<MainComponent> (this)] { if (sp) sp->setMixerMode (MixerPanel::Mode::hidden); }); };
+        w->setContentNonOwned (mixer.get(), false);
+        w->setLookAndFeel (&lookAndFeel);
+        w->setIcon (Logo::createIconImage (256));
+
+        auto saved = appProperties.getUserSettings()->getValue ("mixerWindowState");
+        if (saved.isEmpty() || ! w->restoreWindowStateFromString (saved))
+            w->centreWithSize (1100, 560);
+
+        w->setVisible (true);
+        mixerWindow = std::move (w);
+    }
+
+    resized();
+    menuItemsChanged();
 }
 
 void MainComponent::setStatus (const juce::String& s)
@@ -509,6 +691,9 @@ void MainComponent::setStatus (const juce::String& s)
 //==============================================================================
 void MainComponent::openSession (const juce::File& file)
 {
+    auto restoreMixer = mixerMode;
+    setMixerMode (MixerPanel::Mode::hidden);
+    destroyMixer();
     arrange = nullptr;
 
     if (session != nullptr)
@@ -540,15 +725,26 @@ void MainComponent::openSession (const juce::File& file)
     appProperties.getUserSettings()->setValue ("lastSession", session->getFile().getFullPathName());
 
     if (auto w = dynamic_cast<juce::DocumentWindow*> (getTopLevelComponent()))
-        w->setName ("Tapedeck - " + session->getName());
+        w->setName ("Croft DAW - " + session->getName());
 
     menuItemsChanged();
     resized();
+
+    if (restoreMixer != MixerPanel::Mode::hidden)
+        setMixerMode (restoreMixer);
+
     setStatus ("Opened " + session->getFile().getFullPathName());
 }
 
 bool MainComponent::saveBeforeQuit()
 {
+    appProperties.getUserSettings()->setValue ("mixerHeight", dockedMixerHeight);
+
+    if (mixerWindow != nullptr)
+        appProperties.getUserSettings()->setValue ("mixerWindowState", mixerWindow->getWindowStateAsString());
+
+    appProperties.saveIfNeeded();
+
     if (session != nullptr)
     {
         session->edit->getTransport().stop (false, true);
@@ -558,12 +754,28 @@ bool MainComponent::saveBeforeQuit()
     return true;
 }
 
+void MainComponent::setMixerModeByName (const juce::String& name)
+{
+    if (name == "hidden")      setMixerMode (MixerPanel::Mode::hidden);
+    else if (name == "window") setMixerMode (MixerPanel::Mode::window);
+    else                       setMixerMode (MixerPanel::Mode::docked);
+}
+
 void MainComponent::saveScreenshot (const juce::File& f)
 {
-    auto img = createComponentSnapshot (getLocalBounds(), true, 1.0f);
-    f.deleteFile();
-    juce::FileOutputStream out (f);
-    juce::PNGImageFormat().writeImageToStream (img, out);
+    auto write = [] (const juce::Image& img, const juce::File& file)
+    {
+        file.deleteFile();
+        juce::FileOutputStream out (file);
+        juce::PNGImageFormat().writeImageToStream (img, out);
+    };
+
+    write (createComponentSnapshot (getLocalBounds(), true, 1.0f), f);
+
+    // When the mixer is in its own window, save that too: <name>-mixer.png
+    if (mixerMode == MixerPanel::Mode::window && mixer != nullptr)
+        write (mixer->createComponentSnapshot (mixer->getLocalBounds(), true, 1.0f),
+               f.getSiblingFile (f.getFileNameWithoutExtension() + "-mixer.png"));
 }
 
 void MainComponent::newSessionDialog()
@@ -635,6 +847,123 @@ void MainComponent::exportStemsDialog()
             if (! exportStemsTo (dir).isEmpty())
                 dir.revealToUser();
         });
+}
+
+void MainComponent::runRecordingSelfTest (std::function<void (bool)> onDone)
+{
+    auto log = [] (const juce::String& m) { std::cout << "[record-test] " << m << std::endl; };
+    auto& dm = engine.getDeviceManager().deviceManager;
+
+    // Prefer JACK when present (CI / headless), with two inputs enabled
+    if (dm.getCurrentAudioDeviceType() != "JACK")
+        dm.setCurrentAudioDeviceType ("JACK", true);
+
+    auto setup = dm.getAudioDeviceSetup();
+    setup.useDefaultInputChannels = false;
+    setup.inputChannels.setRange (0, 2, true);
+    setup.useDefaultOutputChannels = true;
+    auto err = dm.setAudioDeviceSetup (setup, true);
+    log ("device: " + dm.getCurrentAudioDeviceType() + " / "
+         + (dm.getCurrentAudioDevice() != nullptr ? dm.getCurrentAudioDevice()->getName() : juce::String ("none"))
+         + (err.isNotEmpty() ? " error: " + err : juce::String()));
+
+    struct Step { int delayMs; std::function<void()> fn; };
+    auto steps = std::make_shared<std::vector<Step>>();
+    auto ok = std::make_shared<bool> (true);
+    auto sp = SafePointer<MainComponent> (this);
+
+    auto track = [sp]() -> te::AudioTrack* { return sp != nullptr ? sp->session->getRecordTracks().getFirst() : nullptr; };
+
+    auto describe = [sp, track, log]
+    {
+        auto t = track();
+        juce::String clips;
+        for (auto c : t->getClips())
+            clips << "[" << juce::String (c->getPosition().getStart().inSeconds(), 2) << "-" << juce::String (c->getPosition().getEnd().inSeconds(), 2) << "] ";
+        log ("track clips: " + clips + "| take lanes: " + juce::String (sp->session->getTakeLanes (*t).size()));
+    };
+
+    auto recordFor = [sp] (int ms)
+    {
+        auto& tc = sp->session->edit->getTransport();
+        tc.setPosition (te::TimePosition());
+        tc.record (false);
+        juce::ignoreUnused (ms);
+    };
+
+    // Let the device list settle (splitting inputs into mono channels rebuilds it)
+    steps->push_back ({ 1500, [sp] { Session::configureInputDevices (sp->engine); } });
+
+    steps->push_back ({ 2500, [sp, track, log, ok]
+    {
+        auto t = track();
+        auto inputs = sp->session->getAvailableInputs();
+        log ("inputs available: " + juce::String (inputs.size()));
+
+        te::InputDeviceInstance* wave = nullptr;
+        for (auto in : inputs)
+            if (in->getInputDevice().getDeviceType() == te::InputDevice::waveDevice) { wave = in; break; }
+
+        if (wave == nullptr) { log ("FAIL: no audio input"); *ok = false; return; }
+
+        sp->session->setInputFor (*t, wave);
+        sp->session->setArmed (*t, true);
+        log ("armed " + t->getName() + " on " + wave->getInputDevice().getName() + ": " + juce::String (sp->session->isArmed (*t) ? "yes" : "no"));
+    }});
+
+    steps->push_back ({ 1000, [recordFor] { recordFor (0); } });
+    steps->push_back ({ 2500, [sp] { sp->session->edit->getTransport().stop (false, false); } });
+    steps->push_back ({ 3000, [describe, track, ok, log]
+    {
+        describe();
+        if (track()->getClips().size() != 1) { log ("FAIL: expected 1 clip after first pass"); *ok = false; }
+    }});
+
+    steps->push_back ({ 200, [recordFor] { recordFor (0); } });
+    steps->push_back ({ 2500, [sp] { sp->session->edit->getTransport().stop (false, false); } });
+    steps->push_back ({ 1500, [sp, describe, track, ok, log]
+    {
+        describe();
+        if (sp->session->getTakeLanes (*track()).size() != 2) { log ("FAIL: expected 2 take lanes after recording over pass 1"); *ok = false; }
+    }});
+
+    // Loop record: a 2.5 s loop for ~3 passes -> several takes in one go
+    steps->push_back ({ 200, [sp]
+    {
+        auto& tc = sp->session->edit->getTransport();
+        tc.setLoopRange ({ te::TimePosition::fromSeconds (4.0), te::TimePosition::fromSeconds (6.5) });
+        tc.looping = true;
+        tc.setPosition (te::TimePosition::fromSeconds (4.0));
+        tc.record (false);
+    }});
+    steps->push_back ({ 8200, [sp] { sp->session->edit->getTransport().stop (false, false); } });
+    steps->push_back ({ 2000, [sp, describe, track, ok, log]
+    {
+        describe();
+        auto lanes = sp->session->getTakeLanes (*track()).size();
+        log ("lanes after loop recording: " + juce::String (lanes));
+        if (lanes < 5) { log ("FAIL: loop recording should add a lane per pass"); *ok = false; }
+    }});
+
+    // Run the steps one after another
+    auto runNext = std::make_shared<std::function<void (size_t)>>();
+    *runNext = [steps, runNext, ok, onDone, log] (size_t i)
+    {
+        if (i >= steps->size())
+        {
+            log (*ok ? "PASS" : "FAILED");
+            onDone (*ok);
+            return;
+        }
+
+        juce::Timer::callAfterDelay ((*steps)[i].delayMs, [steps, runNext, i]
+        {
+            (*steps)[i].fn();
+            (*runNext) (i + 1);
+        });
+    };
+
+    (*runNext) (0);
 }
 
 juce::Array<juce::File> MainComponent::exportStemsTo (const juce::File& dir)
@@ -833,6 +1162,16 @@ bool MainComponent::keyPressed (const juce::KeyPress& k)
     }
     if (k == juce::KeyPress ('r') || k == juce::KeyPress ('*'))         { toggleRecord(); return true; }
     if (k == juce::KeyPress::returnKey || k == juce::KeyPress::homeKey) { t.setPosition (te::TimePosition()); return true; }
+    if (k == juce::KeyPress ('x'))
+    {
+        setMixerMode (mixerMode == MixerPanel::Mode::hidden ? MixerPanel::Mode::docked : MixerPanel::Mode::hidden);
+        return true;
+    }
+    if (k == juce::KeyPress ('X', juce::ModifierKeys::shiftModifier, 0) || k == juce::KeyPress ('x', juce::ModifierKeys::shiftModifier, 0))
+    {
+        setMixerMode (mixerMode == MixerPanel::Mode::window ? MixerPanel::Mode::docked : MixerPanel::Mode::window);
+        return true;
+    }
     if (k == juce::KeyPress ('l'))                                       { menuItemSelected (cmd_toggleLoop, 0); return true; }
     if (k == juce::KeyPress ('c'))                                       { menuItemSelected (cmd_toggleClick, 0); return true; }
     if (k == juce::KeyPress ('s'))                                       { splitSelectedAtPlayhead(); return true; }
@@ -914,6 +1253,7 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
     {
         m.addItem (item (cmd_addTrack, "New Audio Track", c + "T"));
         m.addItem (item (cmd_addInstrumentTrack, "New Instrument Track (EZdrummer etc.)..."));
+        m.addItem (item (cmd_addBus, "New Aux Bus (reverb, delay, group...)"));
         m.addSeparator();
         m.addItem (item (cmd_importFile, "Import Audio/MIDI to Selected Track...", c + "I", getSelectedTrack() != nullptr));
         m.addSeparator();
@@ -935,6 +1275,10 @@ juce::PopupMenu MainComponent::getMenuForIndex (int index, const juce::String&)
     }
     else if (index == 5)
     {
+        m.addItem (item (cmd_mixerDocked, "Mixer Below Tracks", "X", true, mixerMode == MixerPanel::Mode::docked));
+        m.addItem (item (cmd_mixerWindowed, "Mixer in Separate Window", "Shift+X", true, mixerMode == MixerPanel::Mode::window));
+        m.addItem (item (cmd_mixerHidden, "Hide Mixer", {}, true, mixerMode == MixerPanel::Mode::hidden));
+        m.addSeparator();
         m.addItem (item (cmd_zoomIn, "Zoom In", "+"));
         m.addItem (item (cmd_zoomOut, "Zoom Out", "-"));
     }
@@ -992,6 +1336,14 @@ void MainComponent::menuItemSelected (int id, int)
             break;
         case cmd_toggleClick:       session->edit->clickTrackEnabled = ! session->edit->clickTrackEnabled.get(); break;
         case cmd_pluginManager:     showPluginManager(); break;
+        case cmd_mixerDocked:   setMixerMode (MixerPanel::Mode::docked); break;
+        case cmd_mixerWindowed: setMixerMode (MixerPanel::Mode::window); break;
+        case cmd_mixerHidden:   setMixerMode (MixerPanel::Mode::hidden); break;
+        case cmd_addBus:
+            session->edit->getUndoManager().beginNewTransaction();
+            if (session->addBus() == nullptr) setStatus ("Bus limit reached.");
+            else if (mixerMode == MixerPanel::Mode::hidden) setMixerMode (MixerPanel::Mode::docked);
+            break;
         case cmd_zoomIn:            arrange->zoomBy (1.25); break;
         case cmd_zoomOut:           arrange->zoomBy (0.8); break;
         default: break;

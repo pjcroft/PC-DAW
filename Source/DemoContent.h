@@ -44,7 +44,7 @@ namespace DemoContent
 
     inline juce::File prepareDemoSession (te::Engine& engine)
     {
-        auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("TapedeckDemo");
+        auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("CroftDAWDemo");
         folder.deleteRecursively();
         folder.createDirectory();
 
@@ -91,6 +91,17 @@ namespace DemoContent
             for (int q = 0; q < 8; ++q)
                 pluck (bass, (int) ((bar * 4 + q * 0.5) * beat * sr), midiToHz (roots[(bar / 2) % 4] - 12), sr, 0.35f, 0.995f, (int) (sr * beat * 0.5), rng);
 
+        // A second pass of the lead, recorded later over the same bars
+        juce::AudioBuffer<float> lead2 (1, total);
+        lead2.clear();
+        const int melody2[] = { 64, 66, 67, 71, 74, 72, 71, 69, 67, 69, 71, 67, 64, 62, 64, 0 };
+        for (int i = 0; i < 16; ++i)
+            if (melody2[i] > 0)
+                pluck (lead2, (int) ((16 + i * 1.0) * beat * sr), midiToHz (melody2[i]), sr, 0.3f, 0.9985f, (int) (sr * beat * 0.9), rng);
+
+        auto gtrLead2 = folder.getChildFile ("Gtr Lead (pass 2).wav");
+        writeWav (gtrLead2, lead2, sr);
+
         auto gtrL = folder.getChildFile ("Gtr Rhythm L.wav");
         auto gtrR = folder.getChildFile ("Gtr Rhythm R.wav");
         auto gtrLead = folder.getChildFile ("Gtr Lead.wav");
@@ -135,10 +146,10 @@ namespace DemoContent
         {
             Session s (engine, editFile);
             s.setBpm (bpm);
-            s.edit->ensureNumberOfAudioTracks (10);
+            s.edit->ensureNumberOfAudioTracks (8);
             auto tracks = s.getTracks();
 
-            const char* names[] = { "Gtr Rhythm L", "Gtr Rhythm R", "Gtr Lead", "Bass DI", "EZdrummer", "Scratch Vox", "Gtr Overdub", "Room Mic", "Track 9", "Track 10" };
+            const char* names[] = { "Gtr Rhythm L", "Gtr Rhythm R", "Gtr Lead", "Bass DI", "EZdrummer", "Scratch Vox", "Gtr Overdub", "Room Mic" };
             for (int i = 0; i < tracks.size(); ++i)
                 tracks[i]->setName (names[i]);
 
@@ -153,6 +164,38 @@ namespace DemoContent
             if (auto vp = tracks[3]->getVolumePlugin()) vp->setVolumeDb (-6.0f);
             tracks[2]->setSolo (false);
             tracks[5]->setMute (true);
+
+            // Lead pass 2 recorded over pass 1 -> take lanes, then comp the last 2 bars from take 1
+            {
+                te::AudioFile af (engine, gtrLead2);
+                auto len = te::TimeDuration::fromSeconds (af.getLength());
+                if (auto pass2 = tracks[2]->insertWaveClip ("Gtr Lead (pass 2)", gtrLead2, { { te::TimePosition(), len }, {} }, false))
+                {
+                    juce::ReferenceCountedArray<te::Clip> recorded;
+                    recorded.add (pass2.get());
+                    s.handleRecordedClips (*tracks[2], recorded);
+
+                    if (auto take1 = s.getTakeLanes (*tracks[2])[0])
+                        s.compFromLane (*take1, beat * 24, beat * 32);
+                }
+            }
+
+            // Reverb bus fed by the guitars; a fade on the rhythm guitar intro
+            if (auto verb = s.addBus ("Reverb"))
+            {
+                auto n = Session::getBusNumber (*verb);
+                for (int i : { 0, 1, 2 })
+                    if (auto send = s.addSend (*tracks[i], n))
+                        send->setGainDb (i == 2 ? -6.0f : -14.0f);
+            }
+
+            if (auto ac = dynamic_cast<te::AudioClipBase*> (tracks[0]->getClips().getFirst()))
+                ac->setFadeIn (te::TimeDuration::fromSeconds (beat * 4));
+            if (auto ac = dynamic_cast<te::AudioClipBase*> (tracks[1]->getClips().getFirst()))
+            {
+                ac->setFadeIn (te::TimeDuration::fromSeconds (beat * 4));
+                ac->setFadeInType (te::AudioFadeCurve::sCurve);
+            }
 
             auto& t = s.edit->getTransport();
             t.setLoopRange ({ te::TimePosition(), s.edit->tempoSequence.toTime (te::BeatPosition::fromBeats (16.0)) });
