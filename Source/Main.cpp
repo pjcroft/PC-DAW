@@ -18,6 +18,7 @@ public:
         // Developer options:
         //   --demo                fill a scratch session with generated guitar/drum clips
         //   --screenshot <file>   save a PNG of the window after start-up, then quit
+        //   --export-stems <dir>  render stems of the opened session, then quit
         auto args = juce::StringArray::fromTokens (commandLine, true);
         args.trim();
 
@@ -28,13 +29,29 @@ public:
 
         mainWindow = std::make_unique<MainWindow> (*engine, initialSession);
 
+        auto stemsIndex = args.indexOf ("--export-stems");
+
+        if (stemsIndex >= 0 && stemsIndex + 1 < args.size())
+        {
+            auto dir = juce::File::getCurrentWorkingDirectory().getChildFile (args[stemsIndex + 1].unquoted());
+
+            juce::MessageManager::callAsync ([this, dir]
+            {
+                if (auto mc = dynamic_cast<MainComponent*> (mainWindow->getContentComponent()))
+                    for (auto& f : mc->exportStemsTo (dir))
+                        std::cout << "Wrote " << f.getFullPathName() << std::endl;
+
+                systemRequestedQuit();
+            });
+        }
+
         auto shotIndex = args.indexOf ("--screenshot");
 
         if (shotIndex >= 0 && shotIndex + 1 < args.size())
         {
             auto file = juce::File::getCurrentWorkingDirectory().getChildFile (args[shotIndex + 1].unquoted());
 
-            juce::Timer::callAfterDelay (2500, [this, file]
+            juce::Timer::callAfterDelay (6000, [this, file]
             {
                 if (auto mc = dynamic_cast<MainComponent*> (mainWindow->getContentComponent()))
                     mc->saveScreenshot (file);

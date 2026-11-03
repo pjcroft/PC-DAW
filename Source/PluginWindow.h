@@ -131,4 +131,38 @@ public:
 
         UIBehaviour::recreatePluginWindowContentAsync (p);
     }
+
+    /** Used by the engine for renders (stem export). The base class does nothing, so
+        without this every render silently produces no file. Runs the job on a
+        background thread behind a modal progress window. */
+    void runTaskWithProgressBar (te::ThreadPoolJobWithProgress& job) override
+    {
+        struct Runner : public juce::ThreadWithProgressWindow
+        {
+            Runner (te::ThreadPoolJobWithProgress& j)
+                : ThreadWithProgressWindow (j.getJobName(), true, false), job (j) {}
+
+            void run() override
+            {
+                while (! threadShouldExit())
+                {
+                    auto result = job.runJob();
+                    setProgress (job.getCurrentTaskProgress());
+
+                    if (result == juce::ThreadPoolJob::jobHasFinished)
+                        break;
+                }
+            }
+
+            te::ThreadPoolJobWithProgress& job;
+        };
+
+        Runner (job).runThread();
+    }
+
+    void showWarningMessage (const juce::String& message) override
+    {
+        std::cerr << "Tapedeck: " << message << std::endl;
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Tapedeck", message);
+    }
 };

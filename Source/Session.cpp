@@ -6,10 +6,30 @@ Session::Session (te::Engine& e, const juce::File& editFile)
 {
     editFile.getParentDirectory().createDirectory();
 
-    if (editFile.existsAsFile())
-        edit = te::loadEditFromFile (engine, editFile);
-    else
-        edit = te::createEmptyEdit (engine, editFile);
+    // Load or create the Edit ourselves so we can supply a file-path resolver.
+    // Tracktion writes relative clip paths with File::getRelativePathFrom (editFile), i.e. as if the
+    // .tracktionedit file were a folder ("../take.wav"); resolve them the same way so takes stored
+    // next to the session file are found again.
+    auto state = te::loadEditFromFile (engine, editFile.existsAsFile() ? editFile : juce::File(),
+                                       te::ProjectItemID::createNewID (te::ProjectID{}));
+    auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
+
+    if (! id.isValid())
+        id = te::ProjectItemID::createNewID (te::ProjectID{});
+
+    edit = te::Edit::createEdit (te::Edit::Options
+    {
+        engine, state, id, te::Edit::forEditing, nullptr, te::Edit::getDefaultNumUndoLevels(),
+        [editFile] { return editFile; },
+        [editFile] (const juce::String& path) -> juce::File
+        {
+            if (juce::File::isAbsolutePath (path))
+                return juce::File (path);
+
+            return editFile.getChildFile (path);
+        },
+        0
+    });
 
     edit->playInStopEnabled = true;   // hear armed inputs while stopped
     edit->getTransport().ensureContextAllocated();
@@ -318,6 +338,20 @@ juce::Array<juce::File> Session::exportStems (const juce::File& folder, int bitD
         ++index;
 
         if (t->getClips().isEmpty())
+            continue;
+
+        // A MIDI-only track with no instrument plugin would just render silence.
+        bool hasAudioClips = false, hasInstrument = false;
+
+        for (auto c : t->getClips())
+            if (dynamic_cast<te::WaveAudioClip*> (c) != nullptr)
+                hasAudioClips = true;
+
+        for (auto p : getInsertPlugins (*t))
+            if (p->isSynth())
+                hasInstrument = true;
+
+        if (! hasAudioClips && ! hasInstrument)
             continue;
 
         auto name = juce::String (index).paddedLeft ('0', 2) + " " + juce::File::createLegalFileName (t->getName());

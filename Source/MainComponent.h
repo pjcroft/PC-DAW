@@ -152,6 +152,9 @@ public:
     /** Saves the session; returns false if the user cancelled. */
     bool saveBeforeQuit();
 
+    /** Renders stems into a folder and reports in the status bar. Returns the files written. */
+    juce::Array<juce::File> exportStemsTo (const juce::File& folder);
+
     /** Writes a PNG of the window (used for --screenshot). */
     void saveScreenshot (const juce::File&);
 

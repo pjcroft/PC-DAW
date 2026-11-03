@@ -624,18 +624,22 @@ void MainComponent::exportStemsDialog()
             if (dir.existsAsFile())
                 dir = dir.getParentDirectory();
 
-            setStatus ("Exporting stems...");
-            auto files = session->exportStems (dir);
-
-            if (files.isEmpty())
-            {
-                setStatus ("Nothing to export: record or import something first.");
-                return;
-            }
-
-            setStatus ("Exported " + juce::String (files.size()) + " stems (24-bit WAV, all start at 0:00) to " + dir.getFullPathName());
-            dir.revealToUser();
+            if (! exportStemsTo (dir).isEmpty())
+                dir.revealToUser();
         });
+}
+
+juce::Array<juce::File> MainComponent::exportStemsTo (const juce::File& dir)
+{
+    setStatus ("Exporting stems...");
+    auto files = session->exportStems (dir);
+
+    if (files.isEmpty())
+        setStatus ("Nothing to export: record or import something first.");
+    else
+        setStatus ("Exported " + juce::String (files.size()) + " stems (24-bit WAV, all start at 0:00) to " + dir.getFullPathName());
+
+    return files;
 }
 
 void MainComponent::showAudioSettings()

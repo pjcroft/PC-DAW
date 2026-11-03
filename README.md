@@ -99,6 +99,7 @@ Sessions are saved in `~/Music/Tapedeck/<Session Name>/`, with recorded takes al
 ```bash
 Tapedeck --demo                       # opens a generated demo session (no interface needed)
 Tapedeck --demo --screenshot out.png  # writes a screenshot and quits
+Tapedeck --demo --export-stems out/   # renders the demo's stems and quits
 ```
 
 ## Code layout

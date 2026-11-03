@@ -483,11 +483,11 @@ void TrackLane::rebuildThumbnails()
             if (existing != thumbnails.end())
             {
                 newThumbs[c->itemID] = std::move (existing->second);
-                newThumbs[c->itemID]->setNewFile (wac->getPlaybackFile());
+                newThumbs[c->itemID]->setNewFile (af);
             }
             else
             {
-                newThumbs[c->itemID] = std::make_unique<te::SmartThumbnail> (session.engine, wac->getPlaybackFile(), *this, &session.edit.operator*());
+                newThumbs[c->itemID] = std::make_unique<te::SmartThumbnail> (session.engine, af, *this, &track.edit);
             }
         }
     }
@@ -548,7 +548,6 @@ void TrackLane::drawClip (juce::Graphics& g, te::Clip& c)
     if (auto wac = dynamic_cast<te::WaveAudioClip*> (&c))
     {
         auto it = thumbnails.find (c.itemID);
-
         if (it != thumbnails.end() && it->second != nullptr)
         {
             auto pos = c.getPosition();
