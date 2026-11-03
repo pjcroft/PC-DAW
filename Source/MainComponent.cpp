@@ -852,6 +852,12 @@ void MainComponent::exportStemsDialog()
 void MainComponent::runRecordingSelfTest (std::function<void (bool)> onDone)
 {
     auto log = [] (const juce::String& m) { std::cout << "[record-test] " << m << std::endl; };
+
+    // Always start from a fresh, empty scratch session
+    auto testDir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("CroftDAWRecordTest");
+    testDir.deleteRecursively();
+    testDir.createDirectory();
+    openSession (testDir.getChildFile ("Record Test" + juce::String (te::editFileSuffix)));
     auto& dm = engine.getDeviceManager().deviceManager;
 
     // Prefer JACK when present (CI / headless), with two inputs enabled
